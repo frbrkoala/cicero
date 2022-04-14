@@ -59,6 +59,21 @@ class InstanceSaver {
             zip.file('text/grammar.tem.md', instance.getParserManager().getTemplate(), options);
         }
 
+        // save the author/developer signature
+        const authorSignature = JSON.stringify(instance.authorSignature);
+
+        zip.file('signature.json', authorSignature, options);
+
+        //save the party signatures
+        let signatures = instance.contractSignatures;
+        zip.file('signatures/', null, Object.assign({}, options, {
+            dir: true
+        }));
+        signatures.forEach(function (signatureObject) {
+            let signature = JSON.stringify(signatureObject);
+            zip.file(`signatures/${signatureObject.signatory}.json`, signature, options);
+        });
+
         let modelFiles = instance.getModelManager().getModels();
         zip.file('model/', null, Object.assign({}, options, {
             dir: true

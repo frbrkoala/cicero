@@ -15,7 +15,6 @@
 'use strict';
 
 const Template = require('../lib/template');
-const TemplateLoader = require('../lib/templateloader');
 const ContractInstance = require('../src/contractinstanceAlt');
 const stringify = require('json-stable-stringify');
 

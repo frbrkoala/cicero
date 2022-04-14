@@ -148,6 +148,44 @@ require('yargs')
             return;
         }
     })
+
+    .command('verify', 'verify the signatures on template or contract instances', (yargs) => {
+        yargs.option('template', {
+            describe: 'path to the template',
+            type: 'string'
+        });
+        yargs.option('contract', {
+            describe: 'path to a smart legal contract slc file',
+            type: 'string'
+        });
+        yargs.option('warnings', {
+            describe: 'print warnings',
+            type: 'boolean',
+            default: false
+        });
+    }, (argv) => {
+        if (argv.verbose) {
+            Logger.info(`verify the signature of author/developer of ${argv.template} template`);
+        }
+
+        try {
+            argv = Commands.validateVerifyArgs(argv);
+            const options = {
+                warnings: argv.warnings,
+            };
+            return Commands.verify(argv.template, argv.contract, options)
+                .then((result) => {
+                    if(result) {Logger.info('all signatures verified');}
+                })
+                .catch((err) => {
+                    Logger.error(err.message);
+                });
+        } catch (err){
+            Logger.error(err.message);
+            return;
+        }
+    })
+
     .command('normalize', 'normalize markdown (parse & redraft)', (yargs) => {
         yargs.option('template', {
             describe: 'path to the template',
@@ -438,6 +476,16 @@ require('yargs')
             type: 'boolean',
             default: false
         });
+        yargs.option('keystore', {
+            describe: 'p12 keystore path',
+            type: 'string',
+            default: null
+        });
+        yargs.option('passphrase', {
+            describe: 'p12 keystore passphrase',
+            type: 'string',
+            default: null
+        });
     }, (argv) => {
         if (argv.verbose) {
             Logger.info(`create an archive for ${argv.template}`);
@@ -445,10 +493,65 @@ require('yargs')
 
         try {
             argv = Commands.validateArchiveArgs(argv);
+            let options = {};
+
+            if (argv.keystore) {
+                options = {
+                    warnings: argv.warnings,
+                    keystore: {
+                        path: argv.keystore,
+                        passphrase: argv.passphrase
+                    }
+                };
+            } else {
+                options = {
+                    warnings: argv.warnings,
+                };
+            }
+            return Commands.archive(argv.template, argv.target, argv.output, options)
+                .catch((err) => {
+                    Logger.error(err.message);
+                });
+        } catch (err){
+            Logger.error(err.message);
+            return;
+        }
+    })
+    .command('instantiate', 'create a smart legal contract instance', (yargs) => {
+        yargs.option('template', {
+            describe: 'path to the template',
+            type: 'string'
+        });
+        yargs.option('data', {
+            describe: 'path to the contract data',
+            type: 'string'
+        });
+        yargs.option('target', {
+            describe: 'the target language of the archive',
+            type: 'string',
+            default: 'ergo'
+        });
+        yargs.option('output', {
+            describe: 'file name for new archive',
+            type: 'string',
+            default: null
+        });
+        yargs.option('warnings', {
+            describe: 'print warnings',
+            type: 'boolean',
+            default: false
+        });
+    }, (argv) => {
+        if (argv.verbose) {
+            Logger.info(`create an archive for ${argv.template}`);
+        }
+
+        try {
+            argv = Commands.validateInstantiateArgs(argv);
             const options = {
                 warnings: argv.warnings,
             };
-            return Commands.archive(argv.template, argv.target, argv.output, options)
+            return Commands.instantiate(argv.template, argv.data, argv.target, argv.output, options)
                 .catch((err) => {
                     Logger.error(err.message);
                 });
@@ -540,6 +643,57 @@ require('yargs')
         } catch (err){
             Logger.error(err.message);
             return;
+        }
+    })
+    .command('sign', 'sign a contract', (yargs) => {
+        yargs.option('contract', {
+            describe: 'path to a smart legal contract slc file',
+            type: 'string'
+        });
+        yargs.option('keystore', {
+            describe: 'p12 keystore path',
+            type: 'string',
+            default: null
+        });
+        yargs.option('passphrase', {
+            describe: 'p12 keystore passphrase',
+            type: 'string',
+            default: null
+        });
+        yargs.option('signatory', {
+            describe: 'name of the signatory',
+            type: 'string',
+            default: null
+        });
+        yargs.option('output', {
+            describe: 'file name for new archive',
+            type: 'string',
+            default: null
+        });
+        yargs.option('warnings', {
+            describe: 'print warnings',
+            type: 'boolean',
+            default: false
+        });
+    }, (argv) => {
+        if (argv.verbose) {
+            Logger.info(`sign contract ${argv.contract} for signatory ${argv.signatory}`);
+        }
+
+        try {
+            argv = Commands.validateSignArgs(argv);
+            const options = {
+                warnings: argv.warnings,
+            };
+            return Commands.sign(argv.contract, argv.keystore, argv.passphrase, argv.signatory, argv.output, options)
+                .then((result) => {
+                    if(result) {Logger.info('contract has been successfully signed');}
+                })
+                .catch((err) => {
+                    Logger.error(err.message);
+                });
+        } catch (err){
+            Logger.error(err.message);
         }
     })
     .command('get', 'save local copies of external dependencies', (yargs) => {

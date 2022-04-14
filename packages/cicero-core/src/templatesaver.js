@@ -42,6 +42,15 @@ class TemplateSaver {
 
         let zip = new JSZip();
 
+        //save the signature if present
+        if(template.authorSignature){
+            const templateSignatures = {
+                templateSignature: template.authorSignature
+            };
+            const templateSignString =  JSON.stringify(templateSignatures);
+            zip.file('signature.json', templateSignString, options);
+        }
+
         let packageFileContents = JSON.stringify(metadata.getPackageJson());
         zip.file('package.json', packageFileContents, options);
 
