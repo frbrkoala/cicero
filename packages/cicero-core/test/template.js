@@ -19,6 +19,8 @@ const ClauseInstance = require('../lib/clauseinstance');
 
 const fs = require('fs');
 const archiver = require('archiver');
+const forge = require('node-forge');
+const crypto = require('crypto');
 
 const chai = require('chai');
 const assert = require('chai').assert;
@@ -28,17 +30,43 @@ chai.use(require('chai-things'));
 chai.use(require('chai-as-promised'));
 
 /* eslint-disable */
+
 function waitForEvent(emitter, eventType) {
     return new Promise((resolve) => {
         emitter.once(eventType, resolve);
     });
 }
 
+function sign(templateHash, timestamp, p12File, passphrase){
+    // decode p12 from base64
+    const p12Der = forge.util.decode64(p12File);
+    // get p12 as ASN.1 object
+    const p12Asn1 = forge.asn1.fromDer(p12Der);
+    // decrypt p12 using the passphrase 'password'
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, passphrase);
+    //X509 cert forge type
+    const certificateForge = p12.safeContents[0].safeBags[0].cert;
+    //Private Key forge type
+    const privateKeyForge = p12.safeContents[1].safeBags[0].key;
+    //convert cert and private key from forge to PEM
+    const certificatePem = forge.pki.certificateToPem(certificateForge);
+    const privateKeyPem = forge.pki.privateKeyToPem(privateKeyForge);
+    //convert private key in pem to private key type in node
+    const privateKey = crypto.createPrivateKey(privateKeyPem);
+    const sign = crypto.createSign('SHA256');
+    sign.write(templateHash + timestamp);
+    sign.end();
+    const signature = sign.sign(privateKey, 'hex');
+    return {signature: signature, certificate: certificatePem};
+}
+
 async function writeZip(template){
     try {
         fs.mkdirSync('./test/data/archives');
     } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
+        if (err.code !== 'EEXIST') {
+            throw err;
+        }
     }
     let output = fs.createWriteStream(`./test/data/archives/${template}.zip`);
     let archive = archiver('zip', {
@@ -71,7 +99,65 @@ const options = { offline: true };
 
 describe('Template', () => {
 
+    describe('#toArchive', () => {
+
+        it('should create the archive without signing it', async() => {
+            const template = await Template.fromDirectory('./test/data/signing-template/helloworldstate');
+            const archiveBuffer = await template.toArchive('ergo');
+            archiveBuffer.should.not.be.null;
+        });
+
+        it('should create the archive with signing it', async() => {
+            const template = await Template.fromDirectory('./test/data/signing-template/helloworldstate');
+            const p12File = fs.readFileSync('./test/data/signing-template/keystore.p12', { encoding: 'base64' });
+            const keystore = {
+                p12File: p12File,
+                passphrase: 'password'
+            };
+            const archiveBuffer = await template.toArchive('ergo', {keystore});
+            archiveBuffer.should.not.be.null;
+        });
+
+        it('should throw an error if passphrase of the keystore is wrong', async() => {
+            const template = await Template.fromDirectory('./test/data/signing-template/helloworldstate');
+            const p12File = fs.readFileSync('./test/data/signing-template/keystore.p12', { encoding: 'base64' });
+            const keystore = {
+                p12File: p12File,
+                passphrase: '123'
+            };
+            return template.toArchive('ergo', {keystore}).should.be.rejectedWith('PKCS#12 MAC could not be verified. Invalid password?');
+        });
+    });
+
+    describe('#signTemplate', () => {
+
+        it('should sign the content hash and timestamp string using the keystore', async() => {
+            const template = await Template.fromDirectory('./test/data/helloworldstate');
+            const timestamp = Date.now();
+            const templateHash = template.getHash();
+            const p12File = fs.readFileSync('./test/data/keystore.p12', { encoding: 'base64' });
+            const signatureData = sign(templateHash, timestamp, p12File, 'password');
+            template.signTemplate(p12File, 'password', timestamp);
+            const result = template.authorSignature;
+            const expected = {
+                templateHash,
+                timestamp,
+                signatoryCert: signatureData.certificate,
+                signature: signatureData.signature
+            };
+            result.should.deep.equal(expected);
+        });
+    });
+
     describe('#fromDirectory', () => {
+
+        it('should create a template from a directory with signatures of the template developer', () => {
+            return Template.fromDirectory('./test/data/verifying-template-signature/helloworldstateSigned', options).should.be.fulfilled;
+        });
+
+        it('should create a template from a directory without signatures of the template developer', () => {
+            return Template.fromDirectory('./test/data/verifying-template-signature/helloworldstateUnsigned', options).should.be.fulfilled;
+        });
 
         it('should create a template from a directory with no @ClauseDataLogic in logic', () => {
             return Template.fromDirectory('./test/data/no-logic', options).should.be.fulfilled;
@@ -88,6 +174,14 @@ describe('Template', () => {
 
         it('should create a template from a directory', () => {
             return Template.fromDirectory('./test/data/latedeliveryandpenalty', options).should.be.fulfilled;
+        });
+
+        it('should throw error when date of the signature is tampered', async () => {
+            return Template.fromDirectory('./test/data/verifying-template-signature/helloworldstateTamperDate', options).should.be.rejectedWith('Template\'s author signature is invalid!');
+        });
+
+        it('should throw error when the template signature is tampered', async () => {
+            return Template.fromDirectory('./test/data/verifying-template-signature/helloworldstateTamperSign', options).should.be.rejectedWith('Template\'s author signature is invalid!');
         });
 
         it('should throw error when Ergo logic does not parse', async () => {
@@ -298,6 +392,11 @@ In case of delayed delivery except for Force Majeure cases, the Seller shall pay
     });
 
     describe('#fromArchive', () => {
+
+        it('should create a template from a signed template archive', () => {
+            const buffer = fs.readFileSync('./test/data/verifying-template-signature/archiveSigned.cta');
+            return Template.fromArchive(buffer).should.be.fulfilled;
+        });
 
         it('should create a template from an archive', async () => {
             const buffer = fs.readFileSync('./test/data/latedeliveryandpenalty.cta');

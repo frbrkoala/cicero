@@ -28,6 +28,7 @@ chai.use(require('chai-things'));
 chai.use(require('chai-as-promised'));
 
 const Commands = require('../lib/commands');
+const { ContractInstance } = require('@accordproject/cicero-core');
 
 const template = path.resolve(__dirname, 'data/latedeliveryandpenalty/');
 const templateJs = path.resolve(__dirname, 'data/latedeliveryandpenalty_js/');
@@ -1241,9 +1242,28 @@ describe('#validateArchiveArgs', () => {
 });
 
 describe('#archive', async () => {
+    it('should create signed archive', async () => {
+        const archiveName = 'test.cta';
+        const p12path = path.resolve(__dirname, 'data/keystore.p12');
+        const keystore = {
+            path: p12path,
+            passphrase: 'password'
+        };
+        const options = {
+            keystore: keystore
+        };
+        const result = await Commands.archive(template, 'ergo', archiveName, options);
+        result.should.eql(true);
+        const newTemplate = await Template.fromArchive(fs.readFileSync(archiveName));
+        newTemplate.should.not.be.null;
+        newTemplate.should.have.own.property('authorSignature');
+        fs.unlinkSync(archiveName);
+    });
+
     it('should create a valid ergo archive', async () => {
         const archiveName = 'test.cta';
-        const result = await Commands.archive(template, 'ergo', archiveName);
+        const options = {};
+        const result = await Commands.archive(template, 'ergo', archiveName, options);
         result.should.eql(true);
         const newTemplate = await Template.fromArchive(fs.readFileSync(archiveName));
         newTemplate.should.not.be.null;
@@ -1253,7 +1273,8 @@ describe('#archive', async () => {
 
     it('should create a valid ergo archive with a default name', async () => {
         const archiveName = 'latedeliveryandpenalty@0.0.1.cta';
-        const result = await Commands.archive(template, 'ergo', null);
+        const options = {};
+        const result = await Commands.archive(template, 'ergo', null, options);
         result.should.eql(true);
         const newTemplate = await Template.fromArchive(fs.readFileSync(archiveName));
         newTemplate.should.not.be.null;
@@ -1264,24 +1285,140 @@ describe('#archive', async () => {
     it('should create an Ergo archive', async () => {
         const tmpFile = await tmp.file();
         const tmpArchive = tmpFile.path + '.cta';
-        await Commands.archive(template, 'ergo', tmpArchive, false);
+        const options = {};
+        await Commands.archive(template, 'ergo', tmpArchive, options);
         fs.readFileSync(tmpArchive).length.should.be.above(0);
         tmpFile.cleanup();
     });
     it('should create a JavaScript archive', async () => {
         const tmpFile = await tmp.file();
         const tmpArchive = tmpFile.path + '.cta';
-        await Commands.archive(template, 'es6', tmpArchive, false);
+        const options = {};
+        await Commands.archive(template, 'es6', tmpArchive, options);
         fs.readFileSync(tmpArchive).length.should.be.above(0);
         tmpFile.cleanup();
     });
     it('should not create an unknown archive', async () => {
         const tmpFile = await tmp.file();
         const tmpArchive = tmpFile.path + '.cta';
-        return Commands.archive(template, 'foo', tmpArchive, false)
+        const options = {};
+        return Commands.archive(template, 'foo', tmpArchive, options)
             .should.be.rejectedWith('Unknown target: foo (available: es6,java)');
     });
 
+});
+
+describe('#validateSignArgs', () => {
+    it('all args specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        const args  = Commands.validateSignArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc',
+            keystore: 'keystore.p12',
+            passphrase: 'password',
+            signatory: 'partyA',
+            _: ['sign']
+        });
+        args.contract.should.match(/.slc$/);
+    });
+    it('keystore not defined', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        (() => Commands.validateSignArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc',
+            passphrase: 'password',
+            signatory: 'partyA',
+            _: ['sign']
+        })).should.throw('Please define path of the keystore using --keystore');
+    });
+    it('passphrase not defined', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        (() => Commands.validateSignArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc',
+            keystore: 'keystore.p12',
+            signatory: 'partyA',
+            _: ['sign']
+        })).should.throw('Please define the passphrase of the keystore using --pasphrase');
+    });
+    it('signatory not defined', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        (() => Commands.validateSignArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc',
+            keystore: 'keystore.p12',
+            passphrase: 'password',
+            _: ['sign']
+        })).should.throw('Please define the signatory signing the contract using --signatory');
+    });
+    it('verbose flag specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        Commands.validateSignArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc',
+            keystore: 'keystore.p12',
+            passphrase: 'password',
+            signatory: 'partyA',
+            _: ['sign'],
+            verbose: true
+        });
+    });
+    it('bad package.json', () => {
+        process.chdir(path.resolve(__dirname, 'data/'));
+        (() => Commands.validateSignArgs({
+            _: ['sign']
+        })).should.throw(' not a valid cicero template. Make sure that package.json exists and that it has a cicero entry.');
+    });
+});
+
+describe('#sign', async () => {
+    it('should sign the contract for a party/individual', async () => {
+        const archiveName = 'test.slc';
+        const slcPath = path.resolve(__dirname, 'data/contractsigning/latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc');
+        const keystore = path.resolve(__dirname, 'data/contractsigning/keystore.p12');
+        const signatory = 'partyA';
+        const result = await Commands.sign(slcPath, keystore, 'password', signatory, archiveName);
+        result.should.eql(true);
+        const newInstance = await ContractInstance.fromArchive(fs.readFileSync(archiveName));
+        newInstance.should.not.be.null;
+        newInstance.contractSignatures.should.have.lengthOf(1);
+        fs.unlinkSync(archiveName);
+    });
+    it('should sign the contract for a party/individual without specifying output path', async () => {
+        const slcPath = path.resolve(__dirname, 'data/contractsigning/latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc');
+        const keystore = path.resolve(__dirname, 'data/contractsigning/keystore.p12');
+        const signatory = 'partyA';
+        const result = await Commands.sign(slcPath, keystore, 'password', signatory);
+        result.should.eql(true);
+        fs.unlinkSync('latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.slc');
+    });
+});
+
+describe('#validateVerifyArgs', () => {
+    it('all args specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        const args  = Commands.validateVerifyArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.v1.slc',
+            _: ['verify']
+        });
+        args.contract.should.match(/.slc$/);
+    });
+    it('verbose flag specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/contractsigning/'));
+        Commands.validateVerifyArgs({
+            contract: 'latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.v1.slc',
+            _: ['verify'],
+            verbose: true
+        });
+    });
+    it('bad package.json', () => {
+        process.chdir(path.resolve(__dirname, 'data/'));
+        (() => Commands.validateVerifyArgs({
+            _: ['verify']
+        })).should.throw(' not a valid cicero template. Make sure that package.json exists and that it has a cicero entry.');
+    });
+});
+
+describe('#verify', async () => {
+    it('should verify contract signatures', async () => {
+        const slcPath = path.resolve(__dirname, 'data/contractsigning/latedeliveryandpenalty@0.17.0-d0c1a14e8a7af52e0927a23b8b30af3b5a75bee1ab788a15736e603b88a6312c.v1.slc');
+        return Commands.verify(null, slcPath).should.be.fulfilled;
+    });
 });
 
 describe('#validateInstantiateArgs', () => {
@@ -1396,6 +1533,47 @@ describe('#get', async () => {
         await Commands.get(template, dir.path);
         fs.readdirSync(dir.path).length.should.be.above(0);
         dir.cleanup();
+    });
+});
+
+describe('#validateVerfiyArgs', () => {
+    it('no args specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/signedArchive/'));
+        const args  = Commands.validateVerifyArgs({
+            _: ['verify']
+        });
+        args.template.should.match(/cicero-cli[/\\]test[/\\]data[/\\]signedArchive$/);
+    });
+    it('template arg specified', () => {
+        process.chdir(path.resolve(__dirname));
+        const args  = Commands.validateVerifyArgs({
+            _: ['verify', 'data/signedArchive/']
+        });
+        args.template.should.match(/cicero-cli[/\\]test[/\\]data[/\\]signedArchive$/);
+    });
+    it('verbose flag specified', () => {
+        process.chdir(path.resolve(__dirname, 'data/latedeliveryandpenalty/'));
+        Commands.validateVerifyArgs({
+            _: ['verify'],
+            verbose: true
+        });
+    });
+    it('bad package.json', () => {
+        process.chdir(path.resolve(__dirname, 'data/'));
+        (() => Commands.validateVerifyArgs({
+            _: ['verify']
+        })).should.throw(' not a valid cicero template. Make sure that package.json exists and that it has a cicero entry.');
+    });
+});
+
+describe('#verify', async () => {
+    it('should verify the signature of the template author/developer', async () => {
+        const templatePath = path.resolve(__dirname, 'data/signedArchive/');
+        return Commands.verify(templatePath).should.be.fulfilled;
+    });
+    it('should throw error when signture is invalid', async () => {
+        const templatePath = path.resolve(__dirname, 'data/signedArchiveFail/');
+        return Commands.verify(templatePath).should.be.rejectedWith('Template\'s author signature is invalid!');
     });
 });
 

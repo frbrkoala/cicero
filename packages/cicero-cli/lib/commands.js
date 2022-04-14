@@ -611,7 +611,16 @@ class Commands {
     static archive(templatePath, target, outputPath, options) {
         return Commands.loadTemplate(templatePath, options)
             .then(async (template) => {
-                const archive = await template.toArchive(target);
+                let keystore = null;
+                if (options.keystore) {
+                    const p12File = fs.readFileSync(options.keystore.path, { encoding: 'base64' });
+                    const inputKeystore = {
+                        p12File: p12File,
+                        passphrase: options.keystore.passphrase
+                    };
+                    keystore = inputKeystore;
+                }
+                const archive = await template.toArchive(target, {keystore}, options);
                 let file;
                 if (outputPath) {
                     file = outputPath;
@@ -625,6 +634,96 @@ class Commands {
                 fs.writeFileSync(file, archive);
                 return true;
             });
+    }
+
+    /**
+     * Set default params before we create an archive using a template
+     *
+     * @param {object} argv the inbound argument values object
+     * @returns {object} a modfied argument object
+     */
+    static validateSignArgs(argv) {
+        argv = Commands.validateCommonArgs(argv);
+
+        if (!argv.keystore) {
+            throw new Error('Please define path of the keystore using --keystore');
+        }
+        if (!argv.passphrase) {
+            throw new Error('Please define the passphrase of the keystore using --pasphrase');
+        }
+        if (!argv.signatory) {
+            throw new Error('Please define the signatory signing the contract using --signatory');
+        }
+        if(argv.verbose) {
+            Logger.info(`Verifying signatures of contract ${argv.contract}`);
+        }
+
+        return argv;
+    }
+
+    /**
+     * Sign a contract instance
+     *
+     * @param {string} slcPath - path to the slc archive
+     * @param {string} keystore - path to the keystore
+     * @param {string} passphrase - passphrase of the keystore
+     * @param {string} signatory - name of the person/party signing the contract
+     * @param {string} outputPath - to the archive file
+     * @param {Object} [options] - an optional set of options
+     * @returns {object} Promise to the code creating an archive
+     */
+    static async sign(slcPath, keystore, passphrase, signatory, outputPath, options) {
+        return Commands.loadInstance(null, slcPath, options)
+            .then(async (instance) => {
+                const p12File = fs.readFileSync(keystore, { encoding: 'base64' });
+                const archive = await instance.signContract(p12File, passphrase, signatory);
+                let file;
+                if (outputPath) {
+                    file = outputPath;
+                }
+                else {
+                    const instanceName = instance.getIdentifier();
+                    file = `${instanceName}.slc`;
+                }
+                Logger.info('Creating archive: ' + file);
+                fs.writeFileSync(file, archive);
+                return true;
+            });
+    }
+
+    /**
+     * Set default params before we verify signatures of template author/developer
+     *
+     * @param {object} argv the inbound argument values object
+     * @returns {object} a modfied argument object
+     */
+    static validateVerifyArgs(argv) {
+        argv = Commands.validateCommonArgs(argv);
+        return argv;
+    }
+
+    /**
+     * Verify signatures on templates or contract instances
+     *
+     * @param {string} templatePath - path to the template directory or archive
+     * @param {string} contractPath - path to the template directory or archive
+     * @param {Object} [options] - an optional set of options
+     * @returns {object} Promise to the code creating an archive
+     */
+    static async verify(templatePath, contractPath, options) {
+        if (templatePath) {
+            return Commands.loadTemplate(templatePath, options)
+                .then(async(template) => {
+                    const result = await template.verifyTemplateSignature();
+                    return result;
+                });
+        } else {
+            return Commands.loadInstance(null, contractPath, options)
+                .then((instance) => {
+                    instance.verifySignatures();
+                    Logger.info('All signatures verified successfully');
+                });
+        }
     }
 
     /**

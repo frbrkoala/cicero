@@ -18,6 +18,7 @@ const TemplateMetadata = require('./templatemetadata');
 const Logger = require('@accordproject/concerto-core').Logger;
 const ParserManager = require('@accordproject/markdown-template').ParserManager;
 const crypto = require('crypto');
+const forge = require('node-forge');
 const stringify = require('json-stable-stringify');
 const LogicManager = require('@accordproject/ergo-compiler').LogicManager;
 const TemplateLoader = require('./templateloader');
@@ -44,20 +45,26 @@ class Template {
      * @param {object} request - the JS object for the sample request
      * @param {Buffer} logo - the bytes data of logo
      * @param {Object} options  - e.g., { warnings: true }
+     * @param {Object} authorSignature  - object containing template hash, timestamp, author's certificate, signature
      */
-    constructor(packageJson, readme, samples, request, logo, options) {
+    constructor(packageJson, readme, samples, request, logo, options, authorSignature) {
         this.metadata = new TemplateMetadata(packageJson, readme, samples, request, logo);
         this.logicManager = new LogicManager('es6', null, options);
         const templateKind = this.getMetadata().getTemplateType() !== 0 ? 'clause' : 'contract';
         this.parserManager = new ParserManager(this.getModelManager(),null,templateKind);
+        this.authorSignature = authorSignature ? authorSignature : null;
     }
 
     /**
      * Verifies that the template is well formed.
      * Compiles the Ergo logic.
      * Throws an exception with the details of any validation errors.
+     * @param {Object} options  - e.g., { verify: true }
      */
-    validate() {
+    validate(options = {}) {
+        if (options.verifySignature) {
+            this.verifyTemplateSignature();
+        }
         this.getModelManager().validateModelFiles();
         this.getTemplateModel();
         if (this.getMetadata().getRuntime() === 'ergo') {
@@ -157,13 +164,84 @@ class Template {
     }
 
     /**
+     * verifies the signature stored in the template object using the template hash and timestamp
+     */
+    verifyTemplateSignature() {
+        const templateHash = this.getHash();
+        if (this.authorSignature === null) {throw new Error('The template is missing author signature!');}
+        const signature = this.authorSignature.templateSignature.signature;
+        const timestamp = this.authorSignature.templateSignature.timestamp;
+        const signatoryCert = this.authorSignature.templateSignature.signatoryCert;
+        //X509 cert converted from PEM to forge type
+        const certificateForge = forge.pki.certificateFromPem(signatoryCert);
+        //public key in forge type
+        const publicKeyForge = certificateForge.publicKey;
+        //convert public key from forge to pem
+        const publicKeyPem = forge.pki.publicKeyToPem(publicKeyForge);
+        //convert public key in pem to public key type in node.
+        const publicKey = crypto.createPublicKey(publicKeyPem);
+        //signature verification process
+        const verify = crypto.createVerify('SHA256');
+        verify.write(templateHash + timestamp);
+        verify.end();
+        const result = verify.verify(publicKey, signature, 'hex');
+        if (!result) {
+            throw new Error('Template\'s author signature is invalid!');
+        }
+    }
+
+    /**
+     * signs a string made up of template hash and time stamp using private key derived
+     * from the keystore
+     * @param {String} p12File - encoded string of p12 keystore file
+     * @param {String} passphrase - passphrase for the keystore file
+     * @param {Number} timestamp - timestamp of the moment of signature is done
+     */
+    signTemplate(p12File, passphrase, timestamp) {
+        if (typeof(p12File) !== 'string') {throw new Error('p12File should be of type String!');}
+        if (typeof(passphrase) !== 'string') {throw new Error('passphrase should be of type String!');}
+        if (typeof(timestamp) !== 'number') {throw new Error('timestamp should be of type Number!');}
+
+        const templateHash = this.getHash();
+        // decode p12 from base64
+        const p12Der = forge.util.decode64(p12File);
+        // get p12 as ASN.1 object
+        const p12Asn1 = forge.asn1.fromDer(p12Der);
+        // decrypt p12 using the passphrase 'password'
+        const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, passphrase);
+        //X509 cert forge type
+        const certificateForge = p12.safeContents[0].safeBags[0].cert;
+        //Private Key forge type
+        const privateKeyForge = p12.safeContents[1].safeBags[0].key;
+        //convert cert and private key from forge to PEM
+        const certificatePem = forge.pki.certificateToPem(certificateForge);
+        const privateKeyPem = forge.pki.privateKeyToPem(privateKeyForge);
+        //convert private key in pem to private key type in node
+        const privateKey = crypto.createPrivateKey(privateKeyPem);
+        const sign = crypto.createSign('SHA256');
+        sign.write(templateHash + timestamp);
+        sign.end();
+        const signature = sign.sign(privateKey, 'hex');
+        const signatureObject = {
+            templateHash,
+            timestamp,
+            signatoryCert: certificatePem,
+            signature
+        };
+        this.authorSignature = signatureObject;
+    }
+
+    /**
      * Persists this template to a Cicero Template Archive (cta) file.
      * @param {string} [language] - target language for the archive (should be 'ergo')
-     * @param {Object} [options] - JSZip options
-     * @param {Buffer} logo - Bytes data of the PNG file
+     * @param {Object} [options] - JSZip options and keystore object containing path and passphrase for the keystore
      * @return {Promise<Buffer>} the zlib buffer
      */
-    async toArchive(language, options) {
+    async toArchive(language, options = {}) {
+        if (options.keystore) {
+            const timestamp = Date.now();
+            this.signTemplate(options.keystore.p12File, options.keystore.passphrase, timestamp);
+        }
         return TemplateSaver.toArchive(this, language, options);
     }
 
